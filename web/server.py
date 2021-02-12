@@ -21,8 +21,10 @@ from tornado.log import enable_pretty_logging
 from tornado import escape
 from tornado.concurrent import run_on_executor
 from apscheduler.schedulers.background import BackgroundScheduler
+from passlib.hash import pbkdf2_sha256
 
 from crypto import decrypt
+from verification import valid_code
 
 enable_pretty_logging()
 
@@ -278,6 +280,49 @@ class NameHandler(BaseHandler):
         self.write(resp)
 
 
+class VerificationHandler(BaseHandler):
+    executor = ThreadPoolExecutor(50)
+
+    @run_on_executor
+    def generate_code(self):
+        code, image = valid_code()
+        self.set_secure_cookie("id", code)
+        return image
+
+    @run_on_executor
+    def verify_code(self):
+        data = json.loads(self.request.body)
+        username = data["username"]
+        password = data["password"]
+        code = data["code"]
+        _id = self.get_secure_cookie("id")
+        if _id:
+            _id = _id.decode("u8")
+        if _id != code:
+            self.set_status(HTTPStatus.BAD_REQUEST)
+            return "invalid code"
+
+        user = self.mongo.db["users"].find_one({"username": username})
+        if user:
+            self.set_status(HTTPStatus.FORBIDDEN)
+            return "user already exists"
+
+        # db.getCollection('users').createIndex( { "username": 1 }, { unique: true } )
+        self.mongo.db["users"].insert_one({"username": username, "password": pbkdf2_sha256.hash(password)})
+        self.clear_cookie("id")
+        return "register complete"
+
+    @gen.coroutine
+    def get(self):
+        resp = yield self.generate_code()
+        self.write(resp)
+
+    @gen.coroutine
+    def post(self):
+        resp = yield self.verify_code()
+        self.write(resp)
+
+
 class MetricsHandler(BaseHandler):
     executor = ThreadPoolExecutor(100)
 
@@ -337,10 +382,14 @@ class BlacklistHandler(BaseHandler):
 class RunServer:
     root_path = os.path.dirname(__file__)
     static_path = os.path.join(root_path, '')
+    settings = {
+        "cookie_secret": os.getenv("cookie_secret") or "802036caaa2d6f54c7f064d86ae080cc20e00496",
+    }
     handlers = [
         (r'/api/resource', ResourceHandler),
         (r'/api/top', TopHandler),
         (r'/api/name', NameHandler),
+        (r'/api/verification', VerificationHandler),
         (r'/api/metrics', MetricsHandler),
         (r'/api/blacklist', BlacklistHandler),
         (r'/', IndexHandler),
@@ -348,7 +397,7 @@ class RunServer:
          {'path': static_path}),
     ]
 
-    application = web.Application(handlers, xheaders=True)
+    application = web.Application(handlers, **settings, xheaders=True)
 
     @staticmethod
     def run_server(port, host, **kwargs):

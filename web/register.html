@@ -1,0 +1,125 @@
+<!doctype html>
+<html>
+<head>
+    <!-- Global site tag (gtag.js) - Google Analytics -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-K76PSKSSGX"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+
+        function gtag() {
+            dataLayer.push(arguments);
+        }
+
+        gtag('js', new Date());
+
+        gtag('config', 'G-K76PSKSSGX');
+    </script>
+    <meta charset="utf-8">
+    <title>人人影视下载分享</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link href="https://fonts.googleapis.com/css?family=Pacifico&display=swap" rel="stylesheet">
+    <link href="/css/normalize.min.css" rel="stylesheet">
+    <style>
+        h1 {
+            font-family: Pacifico, sans-serif;
+            font-size: 4em;
+            color: #3eb5f1;
+            margin: 0;
+        }
+
+        h2 {
+            font-weight: 300;
+            font-family: sans-serif;
+        }
+
+        .centered {
+            /*position: fixed;*/
+            top: 50%;
+            left: 50%;
+            /*transform: translate(-50%, -50%);*/
+            text-align: center;
+        }
+
+
+    </style>
+</head>
+<body>
+<div class="centered">
+    <br>
+    <h1>人人影视下载分享</h1>
+    <h1>By Benny</h1>
+    <br>
+    <h2>这是我偷过来的，嘿嘿😝</h2>
+
+    <!--    <form>-->
+    <label>用户名：
+        <input name="username" id="username" type="text">
+    </label><br>
+    <label>密码：
+        <input name="password" id="password" type="password">
+    </label><br>
+
+    <img onclick="getCode()" id="verification_code" alt="验证码" src=""/><br>
+    <label>验证码:
+        <input name="code" id="code" type="text" autocomplete="off">
+    </label>
+    <br>
+    <button onclick="register()">注册</button>
+    <!--    </form>-->
+
+    <hr>
+    <div id="tv">
+    </div>
+    <hr>
+
+    <h3>
+        联系我 <a style="text-decoration: none;color: green" href="https://t.me/BennyThink">Benny 小可爱</a>・
+        YYeTs 机器人<a style="text-decoration: none;color: green" href="https://t.me/yyets_bot">Telegram Bot</a>・
+        开源 <a style="text-decoration: none;color: green" href="https://github.com/tgbot-collection/YYeTsBot">GitHub</a>・
+        Telegram <a style="text-decoration: none;color: green" href="https://t.me/mikuri520">Channel</a>・
+        我的博客 <a style="text-decoration: none;color: green" href="https://dmesg.app/">土豆不好吃</a>
+    </h3>
+</div>
+</body>
+<script src="js/axios.min.js"></script>
+<script src="js/analytics.js"></script>
+
+<script>
+
+    function getCode() {
+        axios.get('/api/verification')
+            .then(function (response) {
+                // handle success
+                document.getElementById("verification_code").src = (response.data)
+            })
+            .catch(function (error) {
+                // handle error
+                console.log(error);
+            })
+            .then(function () {
+                // always executed
+            });
+    }
+
+
+    function register() {
+        let username = document.getElementById("username").value
+        let password = document.getElementById("password").value
+        let code = document.getElementById("code").value
+
+        axios.post('/api/verification', {
+            username: username,
+            password: password,
+            code: code
+        }).then(function (response) {
+            alert(response.data);
+            location.href = "/";
+        }).catch(function (error) {
+            alert(error.response.data)
+        });
+
+    }
+
+    getCode();
+</script>
+</html>
