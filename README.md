@@ -4,36 +4,17 @@
 
 [![codecov](https://codecov.io/gh/tgbot-collection/YYeTsBot/branch/master/graph/badge.svg?token=ZL1GCIF95D)](https://codecov.io/gh/tgbot-collection/YYeTsBot)
 
+**⚠️⚠️无法访问？自2021年3月22日起，本站间歇性地被墙啦！⬇️**
+
+🧱 <img src="https://gfw.dmesg.app/get?url=https://yyets.dmesg.app" width = "16" height = "16" alt="gfw status"/>
+
+
 * 人人影视bot，[戳我使用](https://t.me/yyets_bot)
 
 * 人人影视分享站，[戳我使用](https://yyets.dmesg.app/)
 
 机器人和网站由我长期维护，如果遇到问题可以提issue。
 
-- [使用说明](#使用说明)
-- [命令](#命令)
-- [截图](#截图)
-    * [常规搜索](#常规搜索)
-    * [资源分享站截图](#资源分享站截图)
-    * [指定字幕组搜索](#指定字幕组搜索)
-- [部署运行](#部署运行)
-    * [docker-compose](#docker-compose)
-    * [常规方式](#常规方式)
-        + [1. 环境](#1-环境)
-        + [2. 配置TOKEN](#2-配置TOKEN)
-        + [3. 导入数据（可选）](#3-导入数据可选)
-        + [4. 运行](#4-运行)
-        + [5. systemd 单元文件](#5-systemd-单元文件)
-        + [6. 网站部署运行方式](#6-网站部署运行方式)
-- [TODO](#todo)
-- [归档资源下载](#归档资源下载)
-- [开发](#开发)
-    * [添加新的资源网站](#添加新的资源网站)
-    * [health check](#health-check)
-- [Credits](#credits)
-- [支持我](#支持我)
-- [感谢](#感谢)
-- [License](#license)
 
 # 使用说明
 
@@ -68,6 +49,9 @@ yyets_offline - 人人影视离线数据
 ## 资源分享站截图
 本网站永久免费，并且没有任何限制。
 ![](assets/2.png)
+
+支持收藏功能，会跨设备同步
+![](assets/like.png)
 
 ## 指定字幕组搜索
 

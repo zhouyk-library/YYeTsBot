@@ -11,6 +11,12 @@ import os
 import contextlib
 import logging
 import json
+import time
+from urllib import request
+
+from datetime import date, timedelta
+
+from passlib.hash import pbkdf2_sha256
 
 import redis
 import pymongo
@@ -29,6 +35,8 @@ enable_pretty_logging()
 mongo_host = os.getenv("mongo") or "localhost"
 if os.getenv("debug"):
     logging.basicConfig(level=logging.DEBUG)
+
+escape.json_encode = lambda value: json.dumps(value, ensure_ascii=False)
 
 
 class Mongo:
@@ -133,12 +141,87 @@ class IndexHandler(BaseHandler):
         self.write(resp)
 
 
+class UserHandler(BaseHandler):
+    executor = ThreadPoolExecutor(10)
+
+    def set_login(self, username):
+        self.set_secure_cookie("username", username, 365)
+
+    @run_on_executor()
+    def login_user(self):
+        data = json.loads(self.request.body)
+        username = data["username"]
+        password = data["password"]
+        data = self.mongo.db["users"].find_one({"username": username})
+        returned_value = ""
+        if data:
+            # try to login
+            stored_password = data["password"]
+            if pbkdf2_sha256.verify(password, stored_password):
+                self.set_status(HTTPStatus.OK)
+                self.set_login(username)
+            else:
+                self.set_status(HTTPStatus.FORBIDDEN)
+                returned_value = "用户名或密码错误"
+        else:
+            hash_value = pbkdf2_sha256.hash(password)
+            try:
+                self.mongo.db["users"].insert_one(dict(username=username, password=hash_value,
+                                                       date=time.asctime(),
+                                                       ip=self.request.headers.get("X-Real-IP"),
+                                                       browser=self.request.headers['user-agent']
+                                                       )
+                                                  )
+                self.set_login(username)
+                self.set_status(HTTPStatus.CREATED)
+            except Exception as e:
+                self.set_status(HTTPStatus.INTERNAL_SERVER_ERROR)
+                returned_value = str(e)
+
+        return returned_value
+
+    @run_on_executor()
+    def add_remove_fav(self):
+        data = json.loads(self.request.body)
+        resource_id = int(data["resource_id"])
+        username = self.get_secure_cookie("username")
+        if username:
+            username = username.decode('u8')
+            like_list: list = self.mongo.db["users"].find_one({"username": username}).get("like", [])
+            if resource_id in like_list:
+                returned_value = "已取消收藏"
+                like_list.remove(resource_id)
+            else:
+                self.set_status(HTTPStatus.CREATED)
+                like_list.append(resource_id)
+                returned_value = "已添加收藏"
+
+            value = dict(like=like_list)
+            self.mongo.db["users"].update_one({"username": username}, {'$set': value})
+        else:
+            returned_value = "请先登录"
+            self.set_status(HTTPStatus.UNAUTHORIZED)
+
+        return returned_value
+
+    @gen.coroutine
+    def post(self):
+        resp = yield self.login_user()
+        self.write(resp)
+
+    @gen.coroutine
+    def patch(self):
+        resp = yield self.add_remove_fav()
+        self.write(resp)
+
+
 class ResourceHandler(BaseHandler):
     executor = ThreadPoolExecutor(100)
 
     @run_on_executor()
     def get_resource_data(self):
         forbidden = False
+        param = 0
         banner = AntiCrawler(self)
         if banner.execute():
             logging.warning("%s@%s make you happy:-(", self.request.headers.get("user-agent"),
@@ -156,7 +239,6 @@ class ResourceHandler(BaseHandler):
                 {'_id': False})
 
         if data:
-            MetricsHandler.add("resource")
             forbidden = False
         else:
             # not found, dangerous
@@ -167,7 +249,15 @@ class ResourceHandler(BaseHandler):
 
         if forbidden:
             self.set_status(HTTPStatus.FORBIDDEN)
-
+        # is fav?
+        username = self.get_secure_cookie("username")
+        if not forbidden and username:
+            username = username.decode('u8')
+            user_like_data = self.mongo.db["users"].find_one({"username": username})
+            if user_like_data and param in user_like_data.get("like", []):
+                data["is_like"] = True
+            else:
+                data["is_like"] = False
         return data
 
     @run_on_executor()
@@ -185,7 +275,6 @@ class ResourceHandler(BaseHandler):
             ]},
             projection
         )
-        MetricsHandler.add("search")
         return dict(data=list(data))
 
     @gen.coroutine
@@ -201,21 +290,32 @@ class ResourceHandler(BaseHandler):
 
 class TopHandler(BaseHandler):
     executor = ThreadPoolExecutor(100)
+    projection = {'_id': False, 'data.info': True}
+
+    def get_user_like(self) -> list:
+        username = self.get_secure_cookie("username")
+        if username:
+            like_list = self.mongo.db["users"].find_one({"username": username.decode('u8')}).get("like", [])
+
+            data = self.mongo.db["yyets"].find({"data.info.id": {"$in": like_list}}, self.projection) \
+                .sort("data.info.views", pymongo.DESCENDING)
+            return list(data)
+        return []
 
     @run_on_executor()
     def get_top_resource(self):
-        projection = {'_id': False,
-                      'data.info': True,
-                      }
 
         area_dict = dict(ALL={"$regex": ".*"}, US="美国", JP="日本", KR="韩国", UK="英国")
         all_data = {}
         for abbr, area in area_dict.items():
-            data = self.mongo.db["yyets"].find({"data.info.area": area}, projection).sort("data.info.views",
-                                                                                          pymongo.DESCENDING).limit(10)
+            data = self.mongo.db["yyets"].find({"data.info.area": area}, self.projection). \
+                sort("data.info.views", pymongo.DESCENDING).limit(15)
             all_data[abbr] = list(data)
 
         area_dict["ALL"] = "全部"
+        area_dict["LIKE"] = "收藏"
+        all_data["LIKE"] = self.get_user_like()
+
         all_data["class"] = area_dict
         return all_data
 
@@ -228,13 +328,8 @@ class TopHandler(BaseHandler):
 class NameHandler(BaseHandler):
     executor = ThreadPoolExecutor(100)
 
-    @staticmethod
-    def json_encode(value):
-        return json.dumps(value, ensure_ascii=False)
-
     @run_on_executor()
     def get_names(self):
-        escape.json_encode = self.json_encode
 
         if self.get_query_argument("human", None):
             aggregation = [
@@ -281,23 +376,22 @@ class NameHandler(BaseHandler):
 class MetricsHandler(BaseHandler):
     executor = ThreadPoolExecutor(100)
 
-    @classmethod
-    def add(cls, type_name):
-        cls.mongo.db['metrics'].update_one(
-            {'type': type_name}, {'$inc': {'count': 1}},
-            upsert=True
-        )
-
     @run_on_executor()
     def set_metrics(self):
-        self.add("access")
-        self.add("today")
+        metrics_type = self.get_query_argument("type")
+        today = time.strftime("%Y-%m-%d", time.localtime())
+        self.mongo.db['metrics'].update_one(
+            {'date': today}, {'$inc': {metrics_type: 1}},
+            upsert=True
+        )
         self.set_status(HTTPStatus.CREATED)
         return {}
 
     @run_on_executor()
     def get_metrics(self):
-        result = self.mongo.db['metrics'].find({}, {'_id': False})
+        day = self.get_query_argument("date", None)
+        condition = dict(date=day) if day else dict()
+        result = self.mongo.db['metrics'].find(condition, {'_id': False})
         return dict(metrics=list(result))
 
     @gen.coroutine
@@ -309,6 +403,59 @@ class MetricsHandler(BaseHandler):
     def post(self):
         resp = yield self.set_metrics()
         self.write(resp)
+
+
+class GrafanaIndexHandler(BaseHandler):
+    def get(self):
+        self.write({})
+
+
+class GrafanaSearchHandler(BaseHandler):
+    def post(self):
+        data = ["access", "search", "resource"]
+        self.write(json.dumps(data))
+
+
+class GrafanaQueryHandler(BaseHandler):
+    @staticmethod
+    def generate_date_series(start: str, end: str) -> list:
+        start_int = [int(i) for i in start.split("-")]
+        end_int = [int(i) for i in end.split("-")]
+        sdate = date(*start_int)  # start date
+        edate = date(*end_int)  # end date
+
+        delta = edate - sdate  # as timedelta
+        days = []
+        for i in range(delta.days + 1):
+            day = sdate + timedelta(days=i)
+            days.append(day.strftime("%Y-%m-%d"))
+        return days
+
+    @staticmethod
+    def time_str_int(text):
+        return time.mktime(time.strptime(text, "%Y-%m-%d"))
+
+    def post(self):
+        payload = json.loads(self.request.body)
+        start = payload["range"]["from"].split("T")[0]
+        end = payload["range"]["to"].split("T")[0]
+        date_series = self.generate_date_series(start, end)
+        targets = [i["target"] for i in payload["targets"] if i["target"]]
+        grafana_data = []
+        for target in targets:
+            data_points = []
+            condition = {"date": {"$in": date_series}}
+            projection = {"_id": False}
+            result = self.mongo.db["metrics"].find(condition, projection)
+            for i in result:
+                datum = [i[target], self.time_str_int(i["date"]) * 1000]
+                data_points.append(datum)
+            temp = {
+                "target": target,
+                "datapoints": data_points
+            }
+            grafana_data.append(temp)
+        self.write(json.dumps(grafana_data))
 
 
 class BlacklistHandler(BaseHandler):
@@ -334,21 +481,34 @@ class BlacklistHandler(BaseHandler):
         self.write(resp)
 
 
+class NotFoundHandler(BaseHandler):
+    def prepare(self):  # for all methods
+        self.render("404.html")
+
+
 class RunServer:
     root_path = os.path.dirname(__file__)
     static_path = os.path.join(root_path, '')
     handlers = [
         (r'/api/resource', ResourceHandler),
         (r'/api/top', TopHandler),
+        (r'/api/user', UserHandler),
         (r'/api/name', NameHandler),
         (r'/api/metrics', MetricsHandler),
+        (r'/api/grafana/', GrafanaIndexHandler),
+        (r'/api/grafana/search', GrafanaSearchHandler),
+        (r'/api/grafana/query', GrafanaQueryHandler),
         (r'/api/blacklist', BlacklistHandler),
         (r'/', IndexHandler),
         (r'/(.*\.html|.*\.js|.*\.css|.*\.png|.*\.jpg|.*\.ico|.*\.gif|.*\.woff2|.*\.gz|.*\.zip)', web.StaticFileHandler,
          {'path': static_path}),
     ]
+    settings = {
+        "cookie_secret": os.getenv("cookie_secret", "eo2kcgpKwXj8Q3PKYj6nIL1J4j3b58DX")
+    }
 
-    application = web.Application(handlers, xheaders=True)
+    application = web.Application(handlers, xheaders=True, default_handler_class=NotFoundHandler,
+                                  **settings)
 
     @staticmethod
     def run_server(port, host, **kwargs):
@@ -364,15 +524,33 @@ class RunServer:
             print('"Ctrl+C" received, exiting.\n')
 
 
-def reset_day():
+def reset_top():
+    logging.info("resetting top...")
     m = Mongo()
-    query = {"$or": [{"type": "today"}, {"type": "resource"}, {"type": "search"}]}
-    m.db["metrics"].delete_many(query)
+    # before resetting, save top data to history
+    r = request.urlopen("http://127.0.0.1:8888/api/top").read()
+    json_data = json.loads(r.decode('utf-8'))
+    # json_data = requests.get("http://127.0.0.1:8888/api/top").json()
+    last_month = time.strftime("%Y-%m", time.localtime(time.time() - 3600 * 24))
+    json_data["date"] = last_month
+    json_data["type"] = "top"
+    m.db["history"].insert_one(json_data)
+    # save all the views data to history
+    projection = {'_id': False, 'data.info.views': True, 'data.info.id': True}
+    data = m.db['yyets'].find({}, projection).sort("data.info.views", pymongo.DESCENDING)
+    result = {"date": last_month, "type": "detail"}
+    for datum in data:
+        rid = str(datum["data"]["info"]["id"])
+        views = datum["data"]["info"]["views"]
+        result[rid] = views
+    m.db["history"].insert_one(result)
+    # reset
+    m.db["yyets"].update_many({}, {"$set": {"data.info.views": 0}})
 
 
 if __name__ == "__main__":
     scheduler = BackgroundScheduler()
-    scheduler.add_job(reset_day, 'cron', hour=0, minute=0)
+    scheduler.add_job(reset_top, 'cron', hour=0, minute=0, day=1)
     scheduler.start()
     options.define("p", default=8888, help="running port", type=int)
     options.define("h", default='127.0.0.1', help="listen address", type=str)
